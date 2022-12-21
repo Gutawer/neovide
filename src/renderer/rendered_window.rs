@@ -13,6 +13,8 @@ use crate::{
     editor::Style,
     redraw_scheduler::REDRAW_SCHEDULER,
     renderer::{animation_utils::*, GridRenderer, RendererSettings},
+    settings::SETTINGS,
+    window::WindowSettings,
 };
 
 #[derive(Clone, Debug)]
@@ -94,7 +96,12 @@ fn build_window_surface_with_grid_size(
     );
 
     let canvas = surface.canvas();
-    canvas.clear(grid_renderer.get_default_background());
+    let transparency = { SETTINGS.get::<WindowSettings>().transparency };
+    canvas.clear(
+        grid_renderer
+            .get_default_background()
+            .with_a((255.0 * transparency) as u8),
+    );
     surface
 }
 
@@ -268,13 +275,13 @@ impl RenderedWindow {
         let pixel_region = self.pixel_region(font_dimensions);
 
         root_canvas.save();
-        root_canvas.clip_rect(&pixel_region, None, Some(false));
+        root_canvas.clip_rect(pixel_region, None, Some(false));
 
         if self.floating_order.is_none() {
             root_canvas.clear(default_background);
-        }
-
-        if self.floating_order.is_some() && settings.floating_blur {
+        } else if let Some(u64::MAX) = self.floating_order {
+            root_canvas.clear(default_background);
+        } else if self.floating_order.is_some() && settings.floating_blur {
             let blur = blur(
                 (
                     settings.floating_blur_amount_x,
@@ -301,8 +308,11 @@ impl RenderedWindow {
         // Save layer so that setting the blend mode doesn't effect the blur.
         root_canvas.save_layer(&SaveLayerRec::default());
         let mut a = 255;
-        if self.floating_order.is_some() {
+        const BOUND: u64 = u64::MAX - 1;
+        if let Some(0..=BOUND) = self.floating_order {
             a = (settings.floating_opacity.min(1.0).max(0.0) * 255.0) as u8;
+        } else if (SETTINGS.get::<WindowSettings>().transparency - 1.0).abs() > f32::EPSILON {
+            a = 0;
         }
 
         paint.set_color(default_background.with_a(a));
@@ -372,8 +382,10 @@ impl RenderedWindow {
                     height: font_height,
                 } = grid_renderer.font_dimensions;
 
-                let top_offset = self.padding.top as f32 / font_height as f32;
-                let left_offset = self.padding.left as f32 / font_width as f32;
+                let top_offset = self.padding.top as f32 * grid_renderer.scale_factor as f32
+                    / font_height as f32;
+                let left_offset = self.padding.left as f32 * grid_renderer.scale_factor as f32
+                    / font_width as f32;
 
                 let grid_left = grid_left.max(0.0);
                 let grid_top = grid_top.max(0.0);
@@ -436,12 +448,13 @@ impl RenderedWindow {
                         ..
                     } = line_fragment;
                     let grid_position = (*window_left, *window_top);
+                    const BOUND: u64 = u64::MAX - 1;
                     grid_renderer.draw_background(
                         canvas,
                         grid_position,
                         *width,
                         style,
-                        self.floating_order.is_some(),
+                        matches!(self.floating_order, Some(0..=BOUND)),
                     );
                 }
 
